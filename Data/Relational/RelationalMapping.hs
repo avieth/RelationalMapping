@@ -38,7 +38,8 @@ import Data.Relational
 
 -- | Instances of this class can be pushed to / pulled from a relational
 --   interpreter.
-class ( KnownSymbol (RelationalTableName d)
+class ( Eq d
+      , KnownSymbol (RelationalTableName d)
       , Subset (Concat (CompleteCharacterization d)) (RelationalSchema d) ~ 'True
       , Subset (RelationalSchema d) (RelationalSchema d) ~ 'True
       , SubsetUnique (RelationalSchema d) (RelationalSchema d) ~ 'True
