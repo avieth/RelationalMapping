@@ -26,6 +26,11 @@ module Data.Relational.RelationalMapping (
 
     RelationalMapping(..)
 
+  , makeSelect
+  , makeInsert
+  , makeUpdate
+  , makeDelete
+
   , select
   , insert
   , update
@@ -37,6 +42,8 @@ import GHC.TypeLits (Symbol, KnownSymbol)
 import Data.Bijection
 import Data.Proxy
 import Data.Relational
+import Data.Relational.Universe
+import Data.Relational.Interpreter
 
 -- | Instances of this class can be pushed to / pulled from a relational
 --   interpreter.
@@ -64,7 +71,7 @@ class ( Eq d
 
   rowBijection :: d :<->: Row (RelationalSchema d)
 
-select
+makeSelect
   :: forall d condition .
      ( RelationalMapping d
      , IsSubset (Concat condition) (RelationalSchema d)
@@ -72,35 +79,80 @@ select
    => Proxy d
    -> Condition condition
    -> Select '(RelationalTableName d, RelationalSchema d) (RelationalSchema d) condition
-select proxy condition =
+makeSelect proxy condition =
     Select
       (relationalTable proxy)
       (fullProjection (relationalSchema proxy))
       condition
 
-insert
+select
+  :: ( IsSubset (Concat conditioned) (RelationalSchema d)
+     , Every (Data.Relational.Universe.InUniverse (Universe t)) (Snds (RelationalSchema d))
+     , Every (Data.Relational.Universe.InUniverse (Universe t)) (Snds (Concat conditioned))
+     , InterpreterSelectConstraint t (RelationalSchema d) (RelationalSchema d) conditioned
+     , RelationalMapping d
+     , ConvertToRow (Universe t) (RelationalSchema d)
+     , RelationalInterpreter t
+     , Functor (InterpreterMonad t)
+     )
+  => Proxy d
+  -> Proxy t
+  -> Condition conditioned
+  -> (InterpreterMonad t) [Maybe d]
+select proxyD proxyI condition =
+    let selectTerm = makeSelect proxyD condition
+    in  (fmap . fmap . fmap) (biFrom rowBijection) (interpretSelect' proxyI selectTerm)
+    -- ^ three fmaps, for the monad, the list, and the maybe.
+
+makeInsert
   :: forall d .
      ( RelationalMapping d
      )
   => d
   -> Insert '(RelationalTableName d, RelationalSchema d)
-insert d = Insert (relationalTable (Proxy :: Proxy d)) (biTo rowBijection d)
+makeInsert d = Insert (relationalTable (Proxy :: Proxy d)) (biTo rowBijection d)
 
-delete
+insert
+  :: ( Every (InUniverse (Universe interpreter)) (Snds (RelationalSchema d))
+     , InterpreterInsertConstraint interpreter (RelationalSchema d)
+     , RelationalMapping d
+     , RelationalInterpreter interpreter
+     )
+  => d
+  -> Proxy interpreter
+  -> (InterpreterMonad interpreter) ()
+insert d proxyI =
+    let insertTerm = makeInsert d
+    in  interpretInsert proxyI insertTerm
+
+makeDelete
   :: forall d .
      ( RelationalMapping d
      )
   => d
   -> Delete '(RelationalTableName d, RelationalSchema d) (CompleteCharacterization d)
-delete d = Delete (relationalTable (Proxy :: Proxy d)) (completeCharacterization d)
+makeDelete d = Delete (relationalTable (Proxy :: Proxy d)) (completeCharacterization d)
 
-update
+delete
+  :: ( Every (InUniverse (Universe interpreter)) (Snds (Concat (CompleteCharacterization d)))
+     , InterpreterDeleteConstraint interpreter (RelationalSchema d) (CompleteCharacterization d)
+     , RelationalMapping d
+     , RelationalInterpreter interpreter
+     )
+  => d
+  -> Proxy interpreter
+  -> (InterpreterMonad interpreter) ()
+delete d proxyI =
+    let deleteTerm = makeDelete d
+    in  interpretDelete proxyI deleteTerm
+
+makeUpdate
   :: forall d .
      ( RelationalMapping d
      )
   => d
   -> Update '(RelationalTableName d, RelationalSchema d) (RelationalSchema d) (CompleteCharacterization d)
-update d =
+makeUpdate d =
     Update
       (relationalTable proxy)
       (fullProjection (relationalSchema proxy))
@@ -109,3 +161,17 @@ update d =
   where
     proxy :: Proxy d
     proxy = Proxy
+
+update
+  :: ( Every (InUniverse (Universe interpreter)) (Snds (RelationalSchema d))
+     , Every (InUniverse (Universe interpreter)) (Snds (Concat (CompleteCharacterization d)))
+     , InterpreterUpdateConstraint interpreter (RelationalSchema d) (RelationalSchema d) (CompleteCharacterization d)
+     , RelationalMapping d
+     , RelationalInterpreter interpreter
+     )
+  => d
+  -> Proxy interpreter
+  -> (InterpreterMonad interpreter) ()
+update d proxyI =
+    let updateTerm = makeUpdate d
+    in  interpretUpdate proxyI updateTerm
