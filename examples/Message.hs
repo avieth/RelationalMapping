@@ -10,14 +10,20 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ConstraintKinds #-}
 
+import Control.Monad
 import Data.Bijection
 import Data.Proxy
 import Data.Relational
 import Data.Relational.RelationalMapping
+import Data.Relational.Universe
+import Data.Relational.Interpreter
+import Data.Relational.PostgreSQL
 import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Time.LocalTime
+import Database.PostgreSQL.Simple.ToField
 
 newtype User = User T.Text
   deriving (Show, Eq)
@@ -49,11 +55,11 @@ instance Eq Message where
   (Message mfrom mto msendtime _ _) == (Message mfrom' mto' msendtime' _ _) =
       msendtime == msendtime' && mfrom == mfrom' && mto == mto'
 
-type MessageFromColumn = '("from", MessageFrom)
-type MessageToColumn = '("to", MessageTo)
-type MessageSendTimeColumn = '("send_time", MessageSendTime)
-type MessageViewedColumn = '("viewed", MessageViewed)
-type MessageBodyColumn = '("body", MessageBody)
+type MessageFromColumn = '("user_from", MessageFrom)
+type MessageToColumn = '("user_to", MessageTo)
+type MessageSendTimeColumn = '("sent", MessageSendTime)
+type MessageViewedColumn = '("read", MessageViewed)
+type MessageBodyColumn = '("message", MessageBody)
 type MessageSchema = '[ MessageFromColumn, MessageToColumn, MessageSendTimeColumn, MessageViewedColumn, MessageBodyColumn ]
 
 messageFromColumn :: Column MessageFromColumn
@@ -126,9 +132,84 @@ instance RelationalMapping Message where
             (fieldValue mviewed)
             (fieldValue mbody)
 
+fromRow :: RelationalMapping d => Row (RelationalSchema d) -> d
+fromRow = biFrom rowBijection
+
+toRow :: RelationalMapping d => d -> Row (RelationalSchema d)
+toRow = biTo rowBijection
+
 newMessage :: MessageFrom -> MessageTo -> MessageBody -> IO Message
 newMessage mfrom mto mbody = do
     t <- getCurrentTime
     let msendtime = MessageSendTime t
     let mviewed = MessageViewed False
     return $ Message mfrom mto msendtime mviewed mbody
+
+instance InUniverse PostgresUniverse MessageFrom where
+  toUniverse proxy (MessageFrom (User t)) = UText t
+  fromUniverse proxy (UText t) = Just (MessageFrom (User t))
+  type UniverseType PostgresUniverse MessageFrom = T.Text
+  toUniverseAssociated proxy = UText
+  fromUniverseAssociated (UText t) = t
+
+instance InUniverse PostgresUniverse MessageTo where
+  toUniverse proxy (MessageTo (User t)) = UText t
+  fromUniverse proxy (UText t) = Just (MessageTo (User t))
+  type UniverseType PostgresUniverse MessageTo = T.Text
+  toUniverseAssociated proxy = UText
+  fromUniverseAssociated (UText t) = t
+
+instance InUniverse PostgresUniverse MessageBody where
+  toUniverse proxy (MessageBody t) = UText t
+  fromUniverse proxy (UText t) = Just (MessageBody t)
+  type UniverseType PostgresUniverse MessageBody = T.Text
+  toUniverseAssociated proxy = UText
+  fromUniverseAssociated (UText t) = t
+
+instance InUniverse PostgresUniverse MessageViewed where
+  toUniverse proxy (MessageViewed b) = UBool b
+  fromUniverse proxy (UBool b) = Just (MessageViewed b)
+  type UniverseType PostgresUniverse MessageViewed = Bool
+  toUniverseAssociated proxy = UBool
+  fromUniverseAssociated (UBool b) = b
+
+instance InUniverse PostgresUniverse MessageSendTime where
+  toUniverse proxy (MessageSendTime t) = UUTCTime t
+  fromUniverse proxy (UUTCTime t) = Just (MessageSendTime t)
+  type UniverseType PostgresUniverse MessageSendTime = UTCTime
+  toUniverseAssociated proxy = UUTCTime
+  fromUniverseAssociated (UUTCTime t) = t
+
+postgresProxy :: Proxy PostgresInterpreter
+postgresProxy = Proxy
+
+insertMessage :: Message -> PostgresMonad ()
+insertMessage message = interpretInsert postgresProxy (insert message)
+
+markAsRead :: Message -> Message
+markAsRead (Message mto mfrom msent mviewed mbody) = Message mto mfrom msent (MessageViewed True) mbody
+
+readMessages
+  :: forall conditioned .
+     ( Subset (Concat conditioned) (RelationalSchema Message) ~ 'True
+     , Every (InUniverse (Universe PostgresInterpreter)) (Snds (Concat conditioned))
+     , Every Database.PostgreSQL.Simple.ToField.ToField (Fmap PostgresUniverse (Snds (Concat conditioned)))
+     , Monad PostgresMonad
+     )
+  => Condition conditioned
+  -> PostgresMonad [Maybe (Row (RelationalSchema Message))]
+readMessages condition = do
+    rows <- interpretSelect' postgresProxy (select (Proxy :: Proxy Message) condition)
+    let makeUpdate :: Row (RelationalSchema Message)
+                   -> Update
+                        '(RelationalTableName Message, RelationalSchema Message)
+                        (RelationalSchema Message)
+                        (CompleteCharacterization Message)
+        makeUpdate = update . markAsRead . fromRow
+    forM rows (maybeM . fmap (interpretUpdate postgresProxy . makeUpdate))
+    return rows
+
+maybeM :: Monad m => Maybe (m a) -> m ()
+maybeM mx = case mx of
+    Just term -> term >> return ()
+    Nothing -> return ()
