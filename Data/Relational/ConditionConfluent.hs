@@ -26,6 +26,14 @@ typeclasses.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverlappingInstances #-}
 
+module Data.Relational.ConditionConfluent (
+
+    ConditionConfluent(..)
+  , SubstituteConjunction
+  , substituteConjunction
+
+  ) where
+
 import GHC.TypeLits (Symbol)
 import GHC.Exts (Constraint)
 import Data.TypeNat.Nat
@@ -90,6 +98,31 @@ instance
     substituteConjunction f (AndCondition left right) =
         AndCondition (substituteDisjunction f left) (substituteConjunction f right)
 
-exampleCondition2 = column1 .==. True .||. false .&&. true
+exampleCondition = column1 .==. True .||. false .&&. true
 
-exampleCondition2' = substituteConjunction (\(x :: ConditionTerminal Column1) -> false) exampleCondition2
+exampleCondition' = substituteConjunction (\(x :: ConditionTerminal Column1) -> false) exampleCondition
+
+class ConditionConfluent schemaFrom schemaTo where
+  type ConditionTransformation schemaFrom schemaTo (condition :: [[(Symbol, *)]]) :: [[(Symbol, *)]]
+  type ConditionTransformationConstraint schemaFrom schemaTo (condition :: [[(Symbol, *)]]) :: Constraint
+  conditionTransformation
+    :: ( ConditionTransformationConstraint schemaFrom schemaTo condition )
+    => Proxy schemaFrom
+    -> Proxy schemaTo
+    -> Condition condition
+    -> Condition (ConditionTransformation schemaFrom schemaTo condition)
+
+instance ConditionConfluent schema schema where
+  type ConditionTransformation schema schema condition = condition
+  type ConditionTransformationConstraint schema schema condition = ()
+  conditionTransformation _ _ = id
+
+instance ConditionConfluent Schema1 Schema0 where
+  type ConditionTransformation Schema1 Schema0 condition = SubstituteC '[] Column1 condition
+  type ConditionTransformationConstraint Schema1 Schema0 condition = (
+      SubstituteConjunction '[] Column1 condition
+    )
+  conditionTransformation _ _ = substituteConjunction substitute
+    where
+      substitute :: ConditionTerminal Column1 -> ConditionDisjunction '[]
+      substitute _ = false
