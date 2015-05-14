@@ -19,6 +19,8 @@ Portability : non-portable (GHC only)
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ConstraintKinds #-}
 
 module Data.Relational.RelationalMapping (
 
@@ -40,9 +42,9 @@ import Data.Relational
 --   interpreter.
 class ( Eq d
       , KnownSymbol (RelationalTableName d)
-      , Subset (Concat (CompleteCharacterization d)) (RelationalSchema d) ~ 'True
-      , Subset (RelationalSchema d) (RelationalSchema d) ~ 'True
-      , SubsetUnique (RelationalSchema d) (RelationalSchema d) ~ 'True
+      , IsSubset (Concat (CompleteCharacterization d)) (RelationalSchema d)
+      , IsSubset (RelationalSchema d) (RelationalSchema d)
+      , IsSubsetUnique (RelationalSchema d) (RelationalSchema d)
       )
       => RelationalMapping d
   where
@@ -65,7 +67,7 @@ class ( Eq d
 select
   :: forall d condition .
      ( RelationalMapping d
-     , Subset (Concat condition) (RelationalSchema d) ~ 'True
+     , IsSubset (Concat condition) (RelationalSchema d)
      )
    => Proxy d
    -> Condition condition
