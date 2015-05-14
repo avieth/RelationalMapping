@@ -191,7 +191,7 @@ markAsRead (Message mto mfrom msent mviewed mbody) = Message mto mfrom msent (Me
 
 readMessages
   :: forall conditioned .
-     ( Subset (Concat conditioned) (RelationalSchema Message) ~ 'True
+     ( IsSubset (Concat conditioned) (RelationalSchema Message)
      , Every (InUniverse (Universe PostgresInterpreter)) (Snds (Concat conditioned))
      , Every Database.PostgreSQL.Simple.ToField.ToField (Fmap PostgresUniverse (Snds (Concat conditioned)))
      , Monad PostgresMonad
