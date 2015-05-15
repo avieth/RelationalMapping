@@ -33,12 +33,18 @@ module Data.Relational.RelationalMapping (
 
   , select
   , insert
-  , update
   , delete
+  , update
+
+  , SelectConstraint
+  , InsertConstraint
+  , DeleteConstraint
+  , UpdateConstraint
 
   ) where
 
 import GHC.TypeLits (Symbol, KnownSymbol)
+import GHC.Exts (Constraint)
 import Data.Bijection
 import Data.Proxy
 import Data.Relational
@@ -85,16 +91,20 @@ makeSelect proxy condition =
       (fullProjection (relationalSchema proxy))
       condition
 
+type family SelectConstraint datatype interpreter condition :: Constraint where
+  SelectConstraint d i c = (
+      RelationalMapping d
+    , RelationalInterpreter i
+    , Functor (InterpreterMonad i)
+    , IsSubset (Concat c) (RelationalSchema d)
+    , Every (InUniverse (Universe i)) (Snds (RelationalSchema d))
+    , Every (InUniverse (Universe i)) (Snds (Concat c))
+    , InterpreterSelectConstraint i (RelationalSchema d) (RelationalSchema d) c
+    , ConvertToRow (Universe i) (RelationalSchema d)
+    )
+
 select
-  :: ( IsSubset (Concat conditioned) (RelationalSchema d)
-     , Every (Data.Relational.Universe.InUniverse (Universe t)) (Snds (RelationalSchema d))
-     , Every (Data.Relational.Universe.InUniverse (Universe t)) (Snds (Concat conditioned))
-     , InterpreterSelectConstraint t (RelationalSchema d) (RelationalSchema d) conditioned
-     , RelationalMapping d
-     , ConvertToRow (Universe t) (RelationalSchema d)
-     , RelationalInterpreter t
-     , Functor (InterpreterMonad t)
-     )
+  :: SelectConstraint d t conditioned
   => Proxy d
   -> Proxy t
   -> Condition conditioned
@@ -112,12 +122,16 @@ makeInsert
   -> Insert '(RelationalTableName d, RelationalSchema d)
 makeInsert d = Insert (relationalTable (Proxy :: Proxy d)) (biTo rowBijection d)
 
+type family InsertConstraint datatype interpreter :: Constraint where
+  InsertConstraint d i = (
+      RelationalMapping d
+    , RelationalInterpreter i
+    , InterpreterInsertConstraint i (RelationalSchema d)
+    , Every (InUniverse (Universe i)) (Snds (RelationalSchema d))
+    )
+
 insert
-  :: ( Every (InUniverse (Universe interpreter)) (Snds (RelationalSchema d))
-     , InterpreterInsertConstraint interpreter (RelationalSchema d)
-     , RelationalMapping d
-     , RelationalInterpreter interpreter
-     )
+  :: InsertConstraint d interpreter
   => d
   -> Proxy interpreter
   -> (InterpreterMonad interpreter) ()
@@ -133,12 +147,16 @@ makeDelete
   -> Delete '(RelationalTableName d, RelationalSchema d) (CompleteCharacterization d)
 makeDelete d = Delete (relationalTable (Proxy :: Proxy d)) (completeCharacterization d)
 
+type family DeleteConstraint datatype interpreter :: Constraint where
+  DeleteConstraint d i = (
+      RelationalMapping d
+    , RelationalInterpreter i
+    , Every (InUniverse (Universe i)) (Snds (Concat (CompleteCharacterization d)))
+    , InterpreterDeleteConstraint i (RelationalSchema d) (CompleteCharacterization d)
+    )
+
 delete
-  :: ( Every (InUniverse (Universe interpreter)) (Snds (Concat (CompleteCharacterization d)))
-     , InterpreterDeleteConstraint interpreter (RelationalSchema d) (CompleteCharacterization d)
-     , RelationalMapping d
-     , RelationalInterpreter interpreter
-     )
+  :: DeleteConstraint d interpreter
   => d
   -> Proxy interpreter
   -> (InterpreterMonad interpreter) ()
@@ -162,13 +180,17 @@ makeUpdate d =
     proxy :: Proxy d
     proxy = Proxy
 
+type family UpdateConstraint datatype interpreter :: Constraint where
+  UpdateConstraint d i = (
+      RelationalMapping d
+    , RelationalInterpreter i
+    , Every (InUniverse (Universe i)) (Snds (RelationalSchema d))
+    , Every (InUniverse (Universe i)) (Snds (Concat (CompleteCharacterization d)))
+    , InterpreterUpdateConstraint i (RelationalSchema d) (RelationalSchema d) (CompleteCharacterization d)
+    )
+
 update
-  :: ( Every (InUniverse (Universe interpreter)) (Snds (RelationalSchema d))
-     , Every (InUniverse (Universe interpreter)) (Snds (Concat (CompleteCharacterization d)))
-     , InterpreterUpdateConstraint interpreter (RelationalSchema d) (RelationalSchema d) (CompleteCharacterization d)
-     , RelationalMapping d
-     , RelationalInterpreter interpreter
-     )
+  :: UpdateConstraint d interpreter
   => d
   -> Proxy interpreter
   -> (InterpreterMonad interpreter) ()
