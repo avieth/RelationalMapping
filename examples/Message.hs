@@ -184,7 +184,7 @@ postgresProxy :: Proxy PostgresInterpreter
 postgresProxy = Proxy
 
 insertMessage :: Message -> PostgresMonad ()
-insertMessage message = interpretInsert postgresProxy (insert message)
+insertMessage message = insert message postgresProxy
 
 markAsRead :: Message -> Message
 markAsRead (Message mto mfrom msent mviewed mbody) = Message mto mfrom msent (MessageViewed True) mbody
@@ -197,16 +197,12 @@ readMessages
      , Monad PostgresMonad
      )
   => Condition conditioned
-  -> PostgresMonad [Maybe (Row (RelationalSchema Message))]
+  -> PostgresMonad [Maybe Message]
 readMessages condition = do
-    rows <- interpretSelect' postgresProxy (select (Proxy :: Proxy Message) condition)
-    let makeUpdate :: Row (RelationalSchema Message)
-                   -> Update
-                        '(RelationalTableName Message, RelationalSchema Message)
-                        (RelationalSchema Message)
-                        (CompleteCharacterization Message)
-        makeUpdate = update . markAsRead . fromRow
-    forM rows (maybeM . fmap (interpretUpdate postgresProxy . makeUpdate))
+    rows :: [Maybe Message] <- select (Proxy :: Proxy Message) postgresProxy condition
+    let rowsRead = (fmap . fmap) markAsRead rows
+    let rowsUpdate = (fmap . fmap) ((flip update) postgresProxy) rowsRead
+    forM rowsUpdate maybeM
     return rows
 
 maybeM :: Monad m => Maybe (m a) -> m ()
