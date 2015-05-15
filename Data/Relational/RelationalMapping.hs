@@ -55,7 +55,6 @@ import Data.Relational.Interpreter
 --   interpreter.
 class ( Eq d
       , KnownSymbol (RelationalTableName d)
-      , IsSubset (Concat (CompleteCharacterization d)) (RelationalSchema d)
       , IsSubset (RelationalSchema d) (RelationalSchema d)
       , IsSubsetUnique (RelationalSchema d) (RelationalSchema d)
       )
@@ -69,11 +68,6 @@ class ( Eq d
 
   relationalTable :: Proxy d -> Table '(RelationalTableName d, RelationalSchema d)
   relationalTable proxy = Table Proxy (relationalSchema proxy)
-
-  -- Must be able to characterize a given message, so that we can isolate it
-  -- for deletes and updates.
-  type CompleteCharacterization d :: [[(Symbol, *)]]
-  completeCharacterization :: d -> Condition (CompleteCharacterization d)
 
   rowBijection :: d :<->: Row (RelationalSchema d)
 
@@ -140,60 +134,68 @@ insert d proxyI =
     in  interpretInsert proxyI insertTerm
 
 makeDelete
-  :: forall d .
+  :: forall d c .
      ( RelationalMapping d
+     , IsSubset (Concat c) (RelationalSchema d)
      )
-  => d
-  -> Delete '(RelationalTableName d, RelationalSchema d) (CompleteCharacterization d)
-makeDelete d = Delete (relationalTable (Proxy :: Proxy d)) (completeCharacterization d)
+  => Proxy d
+  -> Condition c
+  -> Delete '(RelationalTableName d, RelationalSchema d) c
+makeDelete proxyD condition = Delete (relationalTable proxyD) (condition)
 
-type family DeleteConstraint datatype interpreter :: Constraint where
-  DeleteConstraint d i = (
+type family DeleteConstraint datatype interpreter condition :: Constraint where
+  DeleteConstraint d i condition = (
       RelationalMapping d
     , RelationalInterpreter i
-    , Every (InUniverse (Universe i)) (Snds (Concat (CompleteCharacterization d)))
-    , InterpreterDeleteConstraint i (RelationalSchema d) (CompleteCharacterization d)
+    , Every (InUniverse (Universe i)) (Snds (Concat (condition)))
+    , InterpreterDeleteConstraint i (RelationalSchema d) (condition)
+    , IsSubset (Concat condition) (RelationalSchema d)
     )
 
 delete
-  :: DeleteConstraint d interpreter
-  => d
-  -> Proxy interpreter
+  :: DeleteConstraint d interpreter c
+  => Proxy interpreter
+  -> Proxy d
+  -> Condition c
   -> (InterpreterMonad interpreter) ()
-delete d proxyI =
-    let deleteTerm = makeDelete d
+delete proxyI proxyD condition =
+    let deleteTerm = makeDelete proxyD condition
     in  interpretDelete proxyI deleteTerm
 
 makeUpdate
-  :: forall d .
+  :: forall d c .
      ( RelationalMapping d
+     , IsSubset (Concat c) (RelationalSchema d)
      )
   => d
-  -> Update '(RelationalTableName d, RelationalSchema d) (RelationalSchema d) (CompleteCharacterization d)
-makeUpdate d =
+  -> Condition c
+  -> Update '(RelationalTableName d, RelationalSchema d) (RelationalSchema d) c
+makeUpdate d condition =
     Update
-      (relationalTable proxy)
-      (fullProjection (relationalSchema proxy))
-      (completeCharacterization d)
+      (relationalTable proxyD)
+      (fullProjection (relationalSchema proxyD))
+      (condition)
       (biTo rowBijection d)
   where
-    proxy :: Proxy d
-    proxy = Proxy
+    proxyD :: Proxy d
+    proxyD = Proxy
 
-type family UpdateConstraint datatype interpreter :: Constraint where
-  UpdateConstraint d i = (
+type family UpdateConstraint datatype interpreter condition :: Constraint where
+  UpdateConstraint d i condition = (
       RelationalMapping d
     , RelationalInterpreter i
     , Every (InUniverse (Universe i)) (Snds (RelationalSchema d))
-    , Every (InUniverse (Universe i)) (Snds (Concat (CompleteCharacterization d)))
-    , InterpreterUpdateConstraint i (RelationalSchema d) (RelationalSchema d) (CompleteCharacterization d)
+    , Every (InUniverse (Universe i)) (Snds (Concat (condition)))
+    , InterpreterUpdateConstraint i (RelationalSchema d) (RelationalSchema d) (condition)
+    , IsSubset (Concat condition) (RelationalSchema d)
     )
 
 update
-  :: UpdateConstraint d interpreter
-  => d
-  -> Proxy interpreter
+  :: UpdateConstraint d interpreter c
+  => Proxy interpreter
+  -> d
+  -> Condition c
   -> (InterpreterMonad interpreter) ()
-update d proxyI =
-    let updateTerm = makeUpdate d
+update proxyI d condition =
+    let updateTerm = makeUpdate d condition
     in  interpretUpdate proxyI updateTerm

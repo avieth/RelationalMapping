@@ -90,26 +90,6 @@ instance RelationalMapping Message where
       :| messageBodyColumn
       :| EndSchema
 
-  -- There is no sensible Eq instance for Message; it's perfectly reasonable
-  -- to find the same message body sent from the same user to the same user
-  -- more than once. Our complete characterization uses all fields, and may
-  -- pick out more than one Message!
-  --
-  -- Does it ever make sense to not be able to isolate one thing?
-  -- It would be weird, if deleting the haskell datatype deleted more than one
-  -- row in its table.
-  type CompleteCharacterization Message = '[
-        '[MessageFromColumn]
-      , '[MessageToColumn]
-      , '[MessageSendTimeColumn]
-      ]
-
-  completeCharacterization (Message mfrom mto msendtime _ _) =
-           messageFromColumn .==. mfrom .||. false 
-      .&&. messageToColumn .==. mto .||. false
-      .&&. messageSendTimeColumn .==. msendtime .||. false
-      .&&. true
-
   rowBijection = Bi toRow fromRow
 
     where
@@ -191,9 +171,7 @@ markAsRead (Message mto mfrom msent mviewed mbody) = Message mto mfrom msent (Me
 
 readMessages
   :: forall conditioned .
-     ( IsSubset (Concat conditioned) (RelationalSchema Message)
-     , Every (InUniverse (Universe PostgresInterpreter)) (Snds (Concat conditioned))
-     , Every Database.PostgreSQL.Simple.ToField.ToField (Fmap PostgresUniverse (Snds (Concat conditioned)))
+     ( SelectConstraint Message PostgresInterpreter conditioned
      , Monad PostgresMonad
      )
   => Condition conditioned
@@ -201,9 +179,15 @@ readMessages
 readMessages condition = do
     rows :: [Maybe Message] <- select (Proxy :: Proxy Message) postgresProxy condition
     let rowsRead = (fmap . fmap) markAsRead rows
-    let rowsUpdate = (fmap . fmap) ((flip update) postgresProxy) rowsRead
+    let rowsUpdate = (fmap . fmap) (\x -> update postgresProxy x (mkUpdateCondition x)) rowsRead
     forM rowsUpdate maybeM
     return rows
+  where
+    mkUpdateCondition (Message mfrom mto msendtime _ _) =
+             messageFromColumn .==. mfrom .||. false
+        .&&. messageToColumn .==. mto .||. false
+        .&&. messageSendTimeColumn .==. msendtime .||. false
+        .&&. true
 
 maybeM :: Monad m => Maybe (m a) -> m ()
 maybeM mx = case mx of
