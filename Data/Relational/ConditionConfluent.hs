@@ -105,7 +105,7 @@ exampleCondition' = substituteConjunction (\(x :: ConditionTerminal Column1) -> 
 class ConditionConfluent schemaFrom schemaTo where
   type ConditionTransformation schemaFrom schemaTo (condition :: [[(Symbol, *)]]) :: [[(Symbol, *)]]
   type ConditionTransformationConstraint schemaFrom schemaTo (condition :: [[(Symbol, *)]]) :: Constraint
-  conditionTransformation
+  transformCondition
     :: ( ConditionTransformationConstraint schemaFrom schemaTo condition )
     => Proxy schemaFrom
     -> Proxy schemaTo
@@ -115,14 +115,14 @@ class ConditionConfluent schemaFrom schemaTo where
 instance ConditionConfluent schema schema where
   type ConditionTransformation schema schema condition = condition
   type ConditionTransformationConstraint schema schema condition = ()
-  conditionTransformation _ _ = id
+  transformCondition _ _ = id
 
 instance ConditionConfluent Schema1 Schema0 where
   type ConditionTransformation Schema1 Schema0 condition = SubstituteC '[] Column1 condition
   type ConditionTransformationConstraint Schema1 Schema0 condition = (
       SubstituteConjunction '[] Column1 condition
     )
-  conditionTransformation _ _ = substituteConjunction substitute
+  transformCondition _ _ = substituteConjunction substitute
     where
       substitute :: ConditionTerminal Column1 -> ConditionDisjunction '[]
       substitute _ = false
