@@ -98,12 +98,12 @@ type family SelectConstraint datatype interpreter condition :: Constraint where
     )
 
 select
-  :: SelectConstraint d t conditioned
-  => Proxy d
-  -> Proxy t
+  :: SelectConstraint d i conditioned
+  => Proxy i
+  -> Proxy d
   -> Condition conditioned
-  -> (InterpreterMonad t) [Maybe d]
-select proxyD proxyI condition =
+  -> (InterpreterMonad i) [Maybe d]
+select proxyI proxyD condition =
     let selectTerm = makeSelect proxyD condition
     in  (fmap . fmap . fmap) (biFrom rowBijection) (interpretSelect' proxyI selectTerm)
     -- ^ three fmaps, for the monad, the list, and the maybe.
@@ -126,10 +126,10 @@ type family InsertConstraint datatype interpreter :: Constraint where
 
 insert
   :: InsertConstraint d interpreter
-  => d
-  -> Proxy interpreter
+  => Proxy interpreter
+  -> d
   -> (InterpreterMonad interpreter) ()
-insert d proxyI =
+insert proxyI d =
     let insertTerm = makeInsert d
     in  interpretInsert proxyI insertTerm
 

@@ -164,7 +164,7 @@ postgresProxy :: Proxy PostgresInterpreter
 postgresProxy = Proxy
 
 insertMessage :: Message -> PostgresMonad ()
-insertMessage message = insert message postgresProxy
+insertMessage message = insert postgresProxy message
 
 markAsRead :: Message -> Message
 markAsRead (Message mto mfrom msent mviewed mbody) = Message mto mfrom msent (MessageViewed True) mbody
@@ -177,7 +177,7 @@ readMessages
   => Condition conditioned
   -> PostgresMonad [Maybe Message]
 readMessages condition = do
-    rows :: [Maybe Message] <- select (Proxy :: Proxy Message) postgresProxy condition
+    rows :: [Maybe Message] <- select postgresProxy (Proxy :: Proxy Message) condition
     let rowsRead = (fmap . fmap) markAsRead rows
     let rowsUpdate = (fmap . fmap) (\x -> update postgresProxy x (mkUpdateCondition x)) rowsRead
     forM rowsUpdate maybeM
