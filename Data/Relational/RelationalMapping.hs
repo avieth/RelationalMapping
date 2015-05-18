@@ -56,8 +56,7 @@ import Data.Relational.Interpreter
 
 -- | Instances of this class can be pushed to / pulled from a relational
 --   interpreter.
-class ( Eq d
-      , KnownSymbol (RelationalTableName d)
+class ( KnownSymbol (RelationalTableName d)
       , IsSubset (RelationalSchema d) (RelationalSchema d)
       , IsSubsetUnique (RelationalSchema d) (RelationalSchema d)
       )
