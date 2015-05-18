@@ -26,6 +26,9 @@ module Data.Relational.RelationalMapping (
 
     RelationalMapping(..)
 
+  , toRow
+  , fromRow
+
   , makeSelect
   , makeInsert
   , makeUpdate
@@ -70,6 +73,12 @@ class ( Eq d
   relationalTable proxy = Table Proxy (relationalSchema proxy)
 
   rowBijection :: d :<->: Row (RelationalSchema d)
+
+toRow :: RelationalMapping d => d -> Row (RelationalSchema d)
+toRow = biTo rowBijection
+
+fromRow :: RelationalMapping d => Row (RelationalSchema d) -> d
+fromRow = biFrom rowBijection
 
 makeSelect
   :: forall d condition .
