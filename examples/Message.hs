@@ -15,8 +15,12 @@
 import Control.Monad
 import Data.Bijection
 import Data.Proxy
+import Data.TypeNat.Nat
+import Data.Versioned
+import Data.Migration
 import Data.Relational
 import Data.Relational.RelationalMapping
+import Data.Relational.RelationalMappingVersioned
 import Data.Relational.Universe
 import Data.Relational.Interpreter
 import Data.Relational.PostgreSQL
@@ -25,8 +29,14 @@ import Data.Time.Clock
 import Data.Time.LocalTime
 import Database.PostgreSQL.Simple.ToField
 
+-- We begin by defining the types we wish to work with in business logic, and
+-- some functions on them.
+
 newtype User = User T.Text
   deriving (Show, Eq)
+
+username :: User -> T.Text
+username (User t) = t
 
 newtype MessageFrom = MessageFrom User
   deriving (Show, Eq)
@@ -37,30 +47,58 @@ newtype MessageTo = MessageTo User
 newtype MessageBody = MessageBody T.Text
   deriving (Show)
 
-newtype MessageViewed = MessageViewed Bool
-  deriving (Show)
-
-newtype MessageSendTime = MessageSendTime UTCTime
-  deriving (Eq)
-
-instance Show (MessageSendTime) where
-  show (MessageSendTime utctime) = show (utcToLocalTime utc utctime)
-
-data Message = Message MessageFrom MessageTo MessageSendTime MessageViewed MessageBody
+data Message = Message MessageFrom MessageTo MessageBody
   deriving Show
 
--- This is a reasonable Eq instance, as surely no user can send more than one
--- message to the same user at any particular instant.
-instance Eq Message where
-  (Message mfrom mto msendtime _ _) == (Message mfrom' mto' msendtime' _ _) =
-      msendtime == msendtime' && mfrom == mfrom' && mto == mto'
+replyToMessage :: MessageBody -> Message -> Message
+replyToMessage mbody (Message (MessageFrom ufrom) (MessageTo uto) _) =
+    Message (MessageFrom uto) (MessageTo ufrom) mbody
+
+printMessage :: Message -> T.Text
+printMessage (Message (MessageFrom ufrom) (MessageTo uto) (MessageBody mbody)) =
+    T.concat
+    [ "From: ", username ufrom, "\n"
+    , "To: ", username uto, "\n"
+    , mbody, "\n"
+    , "EOM\n"
+    ]
+
+-- Now we endow Message with a versioned history, which is super easy since
+-- there's currently just one version.
+
+instance Versioned Message where
+
+  type LatestVersion Message = Zero
+
+  data VersionHistory Message n where
+
+    MessageV0
+      :: MessageFrom
+      -> MessageTo
+      -> MessageBody
+      -> VersionHistory Message Zero
+
+  bijectionLatestVersion = Bi toLatest fromLatest
+    where
+      toLatest :: Message -> VersionHistory Message (LatestVersion Message)
+      toLatest (Message mfrom mto mbody) =
+          MessageV0 mfrom mto mbody
+      fromLatest :: VersionHistory Message (LatestVersion Message) -> Message
+      fromLatest (MessageV0 mfrom mto mbody) =
+          Message mfrom mto mbody
+
+  migrationPath = TrivialMigrationPath
+
+-- And now we define a relational mapping for the version history of Message.
 
 type MessageFromColumn = '("user_from", MessageFrom)
 type MessageToColumn = '("user_to", MessageTo)
-type MessageSendTimeColumn = '("sent", MessageSendTime)
-type MessageViewedColumn = '("read", MessageViewed)
 type MessageBodyColumn = '("message", MessageBody)
-type MessageSchema = '[ MessageFromColumn, MessageToColumn, MessageSendTimeColumn, MessageViewedColumn, MessageBodyColumn ]
+type MessageSchema =
+    '[ MessageFromColumn
+     , MessageToColumn
+     , MessageBodyColumn
+     ]
 
 messageFromColumn :: Column MessageFromColumn
 messageFromColumn = column
@@ -68,25 +106,17 @@ messageFromColumn = column
 messageToColumn :: Column MessageToColumn
 messageToColumn = column
 
-messageSendTimeColumn :: Column MessageSendTimeColumn
-messageSendTimeColumn = column
-
-messageViewedColumn :: Column MessageViewedColumn
-messageViewedColumn = column
-
 messageBodyColumn :: Column MessageBodyColumn
 messageBodyColumn = column
 
-instance RelationalMapping Message where
+instance RelationalMapping (VersionHistory Message Zero) where
 
-  type RelationalTableName Message = "messages"
-  type RelationalSchema Message = MessageSchema
+  type RelationalTableName (VersionHistory Message Zero) = "messages_v0"
+  type RelationalSchema (VersionHistory Message Zero) = MessageSchema
 
   relationalSchema proxy =
          messageFromColumn
       :| messageToColumn
-      :| messageSendTimeColumn
-      :| messageViewedColumn
       :| messageBodyColumn
       :| EndSchema
 
@@ -94,36 +124,19 @@ instance RelationalMapping Message where
 
     where
 
-      toRow :: Message -> Row MessageSchema
-      toRow (Message mfrom mto msendtime mviewed mbody) =
+      toRow :: VersionHistory Message Zero -> Row MessageSchema
+      toRow (MessageV0 mfrom mto mbody) =
               (Field Proxy mfrom)
           :&| (Field Proxy mto)
-          :&| (Field Proxy msendtime)
-          :&| (Field Proxy mviewed)
           :&| (Field Proxy mbody)
           :&| EndRow
 
-      fromRow :: Row MessageSchema -> Message
-      fromRow (mfrom :&| mto :&| msendtime :&| mviewed :&| mbody :&| EndRow) =
-          Message
+      fromRow :: Row MessageSchema -> VersionHistory Message Zero
+      fromRow (mfrom :&| mto :&| mbody :&| EndRow) =
+          MessageV0
             (fieldValue mfrom)
             (fieldValue mto)
-            (fieldValue msendtime)
-            (fieldValue mviewed)
             (fieldValue mbody)
-
-fromRow :: RelationalMapping d => Row (RelationalSchema d) -> d
-fromRow = biFrom rowBijection
-
-toRow :: RelationalMapping d => d -> Row (RelationalSchema d)
-toRow = biTo rowBijection
-
-newMessage :: MessageFrom -> MessageTo -> MessageBody -> IO Message
-newMessage mfrom mto mbody = do
-    t <- getCurrentTime
-    let msendtime = MessageSendTime t
-    let mviewed = MessageViewed False
-    return $ Message mfrom mto msendtime mviewed mbody
 
 instance InUniverse PostgresUniverse MessageFrom where
   toUniverse proxy (MessageFrom (User t)) = UText t
@@ -146,50 +159,24 @@ instance InUniverse PostgresUniverse MessageBody where
   toUniverseAssociated proxy = UText
   fromUniverseAssociated (UText t) = t
 
-instance InUniverse PostgresUniverse MessageViewed where
-  toUniverse proxy (MessageViewed b) = UBool b
-  fromUniverse proxy (UBool b) = Just (MessageViewed b)
-  type UniverseType PostgresUniverse MessageViewed = Bool
-  toUniverseAssociated proxy = UBool
-  fromUniverseAssociated (UBool b) = b
-
-instance InUniverse PostgresUniverse MessageSendTime where
-  toUniverse proxy (MessageSendTime t) = UUTCTime t
-  fromUniverse proxy (UUTCTime t) = Just (MessageSendTime t)
-  type UniverseType PostgresUniverse MessageSendTime = UTCTime
-  toUniverseAssociated proxy = UUTCTime
-  fromUniverseAssociated (UUTCTime t) = t
-
 postgresProxy :: Proxy PostgresInterpreter
 postgresProxy = Proxy
 
 insertMessage :: Message -> PostgresMonad ()
-insertMessage message = insert postgresProxy message
+insertMessage message = vinsert postgresProxy message
 
-markAsRead :: Message -> Message
-markAsRead (Message mto mfrom msent mviewed mbody) = Message mto mfrom msent (MessageViewed True) mbody
-
-readMessages
-  :: forall conditioned .
-     ( SelectConstraint Message PostgresInterpreter conditioned
-     , Monad PostgresMonad
-     )
-  => Condition conditioned
-  -> PostgresMonad [Maybe Message]
-readMessages condition = do
-    rows :: [Maybe Message] <- select postgresProxy (Proxy :: Proxy Message) condition
-    let rowsRead = (fmap . fmap) markAsRead rows
-    let rowsUpdate = (fmap . fmap) (\x -> update postgresProxy x (mkUpdateCondition x)) rowsRead
-    forM rowsUpdate maybeM
-    return rows
+messagesTo :: MessageTo -> PostgresMonad [Maybe Message]
+messagesTo receiver =
+    (fmap . fmap . fmap)
+    fromLatestVersionHistory
+    (vselect postgresProxy (Proxy :: Proxy Message) (Proxy :: Proxy (LatestVersion Message)) condition)
   where
-    mkUpdateCondition (Message mfrom mto msendtime _ _) =
-             messageFromColumn .==. mfrom .||. false
-        .&&. messageToColumn .==. mto .||. false
-        .&&. messageSendTimeColumn .==. msendtime .||. false
-        .&&. true
+    condition = messageToColumn .==. receiver .||. false .&&. true
 
-maybeM :: Monad m => Maybe (m a) -> m ()
-maybeM mx = case mx of
-    Just term -> term >> return ()
-    Nothing -> return ()
+messagesFrom :: MessageFrom -> PostgresMonad [Maybe Message]
+messagesFrom sender =
+    (fmap . fmap . fmap)
+    fromLatestVersionHistory
+    (vselect postgresProxy (Proxy :: Proxy Message) (Proxy :: Proxy (LatestVersion Message)) condition)
+  where
+    condition = messageFromColumn .==. sender .||. false .&&. true
